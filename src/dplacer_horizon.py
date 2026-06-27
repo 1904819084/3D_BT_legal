@@ -15,21 +15,32 @@ import random
 from statistics import mean
 import sys, os
 import time
-sys.path.append('/home/pc/aibot/wjchen/file/ICCAD/GP/back/linkhdfs')
-from place3d.dp_copy.prof import do_cprofile
-from place3d.Legalization import Legalization
-#sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Die import Die
 from Terminal import Terminal, Terminals
 import numpy as np
-from place3d.dp_copy.dp_data_horizon import Bin, Cell, CellMove, CriticalPoint, LegalMoveInterval, LocalRegion, Move,Segment
-from place3d.dp_copy.dplacer import Dplacer as Dplacer_o
-from place3d.DataBase import DataBase
-import place3d.dreamplace.ops.greedy_legalize.greedy_legalize as greedy_legalize
-import place3d.dreamplace.ops.abacus_legalize.abacus_legalize as abacus_legalize
-from torch.autograd import Variable
-import torch
+from dp_data_horizon import Bin, Cell, CellMove, CriticalPoint, LegalMoveInterval, LocalRegion, Move, Segment
 import heapq
+
+try:
+    from place3d.dp_copy.prof import do_cprofile
+except ModuleNotFoundError:
+    def do_cprofile(_path):
+        def decorator(func):
+            return func
+        return decorator
+
+try:
+    import place3d.dreamplace.ops.greedy_legalize.greedy_legalize as greedy_legalize
+    import place3d.dreamplace.ops.abacus_legalize.abacus_legalize as abacus_legalize
+    from torch.autograd import Variable
+    import torch
+    DREAMPLACE_AVAILABLE = True
+except ModuleNotFoundError:
+    greedy_legalize = None
+    abacus_legalize = None
+    Variable = None
+    torch = None
+    DREAMPLACE_AVAILABLE = False
 
 
 class Dplacer:
@@ -1769,6 +1780,9 @@ class Dplacer:
         return sum
     
     def abacus(self,cnt):
+        if not DREAMPLACE_AVAILABLE:
+            self.local_single_row_legalize(cnt)
+            return
         cells = self.cells
         dtype = np.float64
         if cnt == 0:
@@ -1825,6 +1839,68 @@ class Dplacer:
             end = floor((c.ly()-self.yl+c.h-1)/self.row_height)
             for i in range(start,end+1):
                 self.segments[i].addCell(c)
+
+    def local_single_row_legalize(self, cnt):
+        if cnt != 0:
+            self.buildSegments()
+
+        rows = [[] for _ in range(self.repeat_count)]
+        for cell in self.cells:
+            row = round((cell.oy() - self.yl) / self.row_height)
+            row = min(max(row, 0), self.repeat_count - 1)
+            rows[row].append(cell)
+
+        overflow = []
+        for row_id, row_cells in enumerate(rows):
+            row_cells.sort(key=lambda c: c.ox())
+            cursor = self.xl
+            kept = []
+            for cell in row_cells:
+                x = min(max(round(cell.ox()), cursor), self.xh - cell.w)
+                if x < cursor:
+                    overflow.append(cell)
+                    continue
+                y = self.yl + row_id * self.row_height
+                cell.setLx(x)
+                cell.setLy(y)
+                cell.placed = True
+                kept.append(cell)
+                cursor = x + cell.w
+            rows[row_id] = kept
+
+        for cell in overflow:
+            best = None
+            for row_id, row_cells in enumerate(rows):
+                cursor = self.xl
+                if row_cells:
+                    cursor = row_cells[-1].hx()
+                if cursor + cell.w <= self.xh:
+                    y = self.yl + row_id * self.row_height
+                    cost = abs(cursor - cell.ox()) + abs(y - cell.oy())
+                    if best is None or cost < best[0]:
+                        best = (cost, row_id, cursor)
+            if best is None:
+                continue
+            _, row_id, x = best
+            y = self.yl + row_id * self.row_height
+            cell.setLx(x)
+            cell.setLy(y)
+            cell.placed = True
+            rows[row_id].append(cell)
+
+        self.buildSegments()
+        self.abacus_move = 0
+        for i, c in enumerate(self.cells):
+            if not c.placed:
+                continue
+            self.abacus_move += abs(c.lx() - self.ori_x[i]) + abs(c.ly() - self.ori_y[i])
+            start = floor((c.ly() - self.yl) / self.row_height)
+            end = floor((c.ly() - self.yl + c.h - 1) / self.row_height)
+            start = max(0, start)
+            end = min(self.repeat_count - 1, end)
+            c.seg.clear()
+            for row_id in range(start, end + 1):
+                self.segments[row_id].addCell(c)
 
     def tetris(self,cnt):
         cells = self.cells

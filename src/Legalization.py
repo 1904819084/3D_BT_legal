@@ -60,7 +60,7 @@ class Legalization:
 
     def read(self,params):
         self.die = params['die']
-        die_size = die.getDieSize()
+        die_size = self.die.getDieSize()
         self.terminals = params['terminals']
         self.terminals_list = self.terminals.getTerminals()
         self.num_terminals = len(self.terminals_list)
