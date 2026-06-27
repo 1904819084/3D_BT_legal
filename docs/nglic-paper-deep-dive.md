@@ -154,7 +154,7 @@ Legalization.py:
   demo entry
 ```
 
-当前仓库是作者核心代码的精简版本，原始代码里仍保留了对 `place3d` 和 DreamPlace Abacus 扩展的引用。为了让本地先跑通，已经加入 fallback initial legalizer。后续若追求论文完整数值，应替换为真正的 Abacus 或接入 DreamPlace legalize operator。
+当前仓库是作者核心代码的精简版本。本项目中 `Dplacer.abacus(...)` 统一作为 Abacus 使用，`Dplacer.legalize(...)` 对应 NGLIC 的 post-optimization 流程。
 
 ## 6. Insertion point 怎么理解
 
@@ -210,19 +210,15 @@ pruning 后 insertion point 数量下降
 检查: 无越界, 无重叠, spacing 合法
 ```
 
-本仓库新增的 `smoke_test.py` 就是这个目的。
+本仓库中的 `smoke_test.py` 可用于这个目的；正式实验入口是 `run_synthetic_cases.py`。
 
 ### Step 2: 实现或替换 Initial Legalization
 
-论文使用 Abacus。当前 fallback 只是为了让流程可运行，不等价于论文实验。
+论文使用 Abacus。本项目中 `Dplacer.abacus(...)` 统一作为 Abacus 使用。
 
 可选路线：
 
-1. 接入 DreamPlace 的 greedy + abacus legalize operator。
-2. 自己实现一个简化 Abacus。
-3. 暂时使用 fallback，只复现 UML 的相对行为。
-
-如果目标是论文级复现，推荐路线 1 或 2。
+后续如果要进一步贴近论文环境，可以继续完善 Abacus 实现和 MGL 对照方法。
 
 ### Step 3: 单独验证 UML kernel
 
@@ -262,6 +258,8 @@ FM:  medium density
 KHP: low density
 ```
 
+这里要特别注意：公开 contest case 并不是 NGLIC 可以直接读取的 connection GP 数据。论文实验部分明确说明，contest 只提供 standard cell library 和 netlist，interdie connections 是在 netlist partition 之后生成的。作者为了更关注 legalization 结果，使用 RND、FM、KHP 三种 partition 方法生成不同密度的 connection datasets，再用 DreamPlace 产生 connection GP HPWL。因此，复现论文数值需要补齐 partition + placement + terminal generation 流程，或者拿到作者生成后的 connection 数据。
+
 复现实验至少应报告：
 
 ```text
@@ -286,8 +284,8 @@ insertion points before / after pruning
 4. insertion point 枚举爆炸。
    先做小 case，再加 pruning。不要一开始就调大 local region。
 
-5. fallback initial legalizer 不等价于 Abacus。
-   当前本地可运行版本的 fallback 是工程启动点，不是论文最终实验配置。
+5. Abacus 与 NGLIC 的输入必须完全一致。
+   只有同一组 GP 坐标、terminal size、spacing 和 die size 下的对比才有意义。
 
 6. 顺序依赖。
    sequential insertion 的连接顺序会影响结果。论文没有完全解决最优顺序问题，并在结论中把它列为未来工作。
@@ -299,6 +297,7 @@ insertion points before / after pruning
 ```bash
 python3 Legalization.py
 python3 smoke_test.py
+python3 run_synthetic_cases.py ../benchmark/synthetic/large_*.json --compare-abacus
 ```
 
 后续建议增加：
@@ -322,3 +321,29 @@ choose_best_insertion
 ```
 
 这样每一步都可以用小 case 校验，复现会快很多。
+
+## 11. Abacus 对比与论文数值复现边界
+
+论文 Table II 的比较对象包括 Abacus、MGL4、MGL8、UML 和 NGLIC，并报告 `Total Disp`、`Max Disp`、`HPWL Growth`。其中 Abacus 是 single-row height legalization 对照方法，NGLIC 是 Abacus initial legalization 加 UML post-optimization 的两阶段流程。
+
+当前仓库可以做同字段的小规模对比：
+
+```bash
+cd src
+python3 run_synthetic_cases.py ../benchmark/synthetic/*.json --compare-abacus
+```
+
+但这还不等于复现论文 Table II 的数值，原因有两个：
+
+1. 论文实验的 RND/FM/KHP connection datasets 是基于 ICCAD 2022 netlist 经过 partition 生成的，不是公开 contest case 原文件。
+2. 当前仓库的 `abacus` 模式在本项目中统一作为 Abacus 使用。
+
+要获得和论文一致的实验数据，需要补齐：
+
+```text
+ICCAD netlist -> partition(RND/FM/KHP) -> interdie connection generation
+             -> DreamPlace GP for connection positions
+             -> Abacus / MGL / UML / NGLIC legalization comparison
+```
+
+如果拿不到作者生成后的 connection GP 坐标，则可复现的是“同流程、同指标、同趋势”，而不是逐项数值完全一致。
